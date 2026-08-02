@@ -1,5 +1,4 @@
 venv
-app.py
 .env
 test.py
 chatbot_widget.html
@@ -11,3 +10,4 @@ chroma_db
 uploads
 .flaskenv
 test.html
+wsgi.py
