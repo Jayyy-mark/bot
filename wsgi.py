@@ -10,10 +10,16 @@ from pathlib import Path
 # =========================================================
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(
+        encoding="utf-8",
+        errors="replace"
+    )
 
 if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(
+        encoding="utf-8",
+        errors="replace"
+    )
 
 
 # =========================================================
@@ -30,6 +36,8 @@ from werkzeug.utils import secure_filename
 # =========================================================
 
 from dotenv import load_dotenv
+
+load_dotenv()
 
 
 # =========================================================
@@ -66,31 +74,70 @@ from pypdf import PdfReader
 # CONFIG
 # =========================================================
 
-load_dotenv()
-
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 if not GEMINI_API_KEY:
     raise RuntimeError(
-        "GEMINI_API_KEY is not set. "
-        "Set it in Render Environment Variables."
+        "GEMINI_API_KEY is not set."
     )
 
+
 # =========================================================
-# FLASK
+# FLASK APP
 # =========================================================
 
 app = Flask(__name__)
 
 
+# =========================================================
+# PATHS
+# =========================================================
+
+# app.root_path is safe here because app has already been created.
+#
+# Render:
+# /opt/render/project/src/uploads
+# /opt/render/project/src/chroma_db
+#
+# Local:
+# D:\Internship\bot\uploads
+# D:\Internship\bot\chroma_db
+
+BASE_DIR = Path(app.root_path)
+
+UPLOAD_FOLDER = BASE_DIR / "uploads"
+CHROMA_DB_PATH = BASE_DIR / "chroma_db"
+
+UPLOAD_FOLDER.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+CHROMA_DB_PATH.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+print("=" * 70, flush=True)
+print("[PATH] BASE_DIR =", BASE_DIR, flush=True)
+print("[PATH] UPLOAD_FOLDER =", UPLOAD_FOLDER, flush=True)
+print("[PATH] CHROMA_DB_PATH =", CHROMA_DB_PATH, flush=True)
+print("[PATH] UPLOAD EXISTS =", UPLOAD_FOLDER.exists(), flush=True)
+print("[PATH] CHROMA EXISTS =", CHROMA_DB_PATH.exists(), flush=True)
+print("=" * 70, flush=True)
+
+
+# =========================================================
+# FLASK CONFIG
+# =========================================================
+
+app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024
 
 
 # =========================================================
 # CORS
 # =========================================================
-
-# Your session ID is stored in the request body.
-# Therefore we don't need cookies for chat sessions.
 
 CORS(
     app,
@@ -100,99 +147,143 @@ CORS(
             "methods": [
                 "GET",
                 "POST",
-                "OPTIONS",
+                "OPTIONS"
             ],
             "allow_headers": [
-                "Content-Type",
-            ],
+                "Content-Type"
+            ]
         }
-    },
+    }
 )
 
 
-
-UPLOAD_FOLDER = Path(app.root_path) / "uploads"
-CHROMA_DB_PATH = Path(app.root_path) / "chroma_db"
+# =========================================================
+# CONSTANTS
+# =========================================================
 
 ALLOWED_EXTENSIONS = {"pdf"}
 
-MAX_FILE_SIZE = 50 * 1024 * 1024
-
 MAX_HISTORY_TURNS = 20
 
-UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
-CHROMA_DB_PATH.mkdir(parents=True, exist_ok=True)
-
-app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
-app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE
 
 # =========================================================
-# GOOGLE CLIENT
+# CHAT MEMORY
 # =========================================================
+
+# session_id -> deque
+#
+# Example:
+#
+# {
+#     "abc123": [
+#         {"role": "user", "content": "hello"},
+#         {"role": "assistant", "content": "Hi!"},
+#     ]
+# }
+
+chat_histories: dict[str, deque] = {}
+
+
+# =========================================================
+# GEMINI CLIENT
+# =========================================================
+
+print("[GEMINI] Creating Gemini client...", flush=True)
 
 client = genai.Client(
     api_key=GEMINI_API_KEY
 )
+
+print("[GEMINI] Gemini client created", flush=True)
 
 
 # =========================================================
 # EMBEDDING MODEL
 # =========================================================
 
+print(
+    "[EMBEDDING] Creating Gemini embedding model...",
+    flush=True
+)
+
 embedding_model = GoogleGenerativeAIEmbeddings(
     model="gemini-embedding-001",
     google_api_key=GEMINI_API_KEY,
 )
 
-
-# =========================================================
-# CHROMADB
-# =========================================================
-
-print("=" * 60, flush=True)
-print(f"[CHROMA] DB PATH = {CHROMA_DB_PATH}", flush=True)
-print(f"[CHROMA] PATH EXISTS = {CHROMA_DB_PATH.exists()}", flush=True)
-print(f"[CHROMA] PATH IS DIR = {CHROMA_DB_PATH.is_dir()}", flush=True)
-
-print("[CHROMA] Creating PersistentClient...", flush=True)
-
-chroma_client = chromadb.PersistentClient(
-    path=str(CHROMA_DB_PATH)
+print(
+    "[EMBEDDING] Embedding model created",
+    flush=True
 )
 
-print("[CHROMA] PersistentClient created", flush=True)
 
-print("[CHROMA] Getting collection...", flush=True)
+# =========================================================
+# CHROMA INITIALIZATION
+# =========================================================
 
-collection = chroma_client.get_or_create_collection(
-    name="documents"
+print("=" * 70, flush=True)
+print("[CHROMA] Initializing Chroma...", flush=True)
+print(
+    f"[CHROMA] Path = {CHROMA_DB_PATH}",
+    flush=True
 )
 
-print("[CHROMA] Collection created/opened", flush=True)
+try:
 
-print("[CHROMA] Testing count()...", flush=True)
+    chroma_client = chromadb.PersistentClient(
+        path=str(CHROMA_DB_PATH)
+    )
 
-count = collection.count()
+    print(
+        "[CHROMA] PersistentClient created",
+        flush=True
+    )
 
-print(f"[CHROMA] Initial count = {count}", flush=True)
-print("=" * 60, flush=True)
+    collection = chroma_client.get_or_create_collection(
+        name="documents"
+    )
 
+    print(
+        "[CHROMA] Collection opened",
+        flush=True
+    )
 
+    # Test ONCE during startup.
+    startup_count = collection.count()
 
+    print(
+        f"[CHROMA] Startup vector count = {startup_count}",
+        flush=True
+    )
 
-# =========================================================
-# IN-MEMORY CHAT HISTORY
-# =========================================================
+    print(
+        "[CHROMA] Initialization successful",
+        flush=True
+    )
 
-chat_histories: dict[str, deque] = {}
+except Exception as e:
+
+    print(
+        "[CHROMA] INITIALIZATION FAILED",
+        flush=True
+    )
+
+    print(
+        repr(e),
+        flush=True
+    )
+
+    raise
+
+print("=" * 70, flush=True)
 
 
 # =========================================================
 # HELPERS
 # =========================================================
 
-
 def allowed_file(filename: str) -> bool:
+
     return (
         "." in filename
         and filename.rsplit(".", 1)[1].lower()
@@ -200,51 +291,44 @@ def allowed_file(filename: str) -> bool:
     )
 
 
-def get_document_count() -> int:
-    """
-    Safely get the number of vectors in Chroma.
-    """
-
-    try:
-        result = collection.count()
-        return int(result)
-
-    except Exception as e:
-        print(
-            f"[CHROMA] Failed to get document count: {e}",
-            flush=True,
-        )
-        raise
-
-
 # =========================================================
 # PDF LOADING
 # =========================================================
 
-
 def load_pdf(pdf_path: str):
+
     print(
-        f"[PDF] Loading: {pdf_path}",
-        flush=True,
+        f"[PDF] Opening: {pdf_path}",
+        flush=True
     )
 
     reader = PdfReader(pdf_path)
 
     documents = []
 
+    total_pages = len(reader.pages)
+
+    print(
+        f"[PDF] Total pages: {total_pages}",
+        flush=True
+    )
+
     for page_number, page in enumerate(
         reader.pages,
-        start=1,
+        start=1
     ):
 
         try:
+
             text = page.extract_text()
 
         except Exception as e:
+
             print(
-                f"[PDF] Failed page {page_number}: {e}",
-                flush=True,
+                f"[PDF] Page {page_number} failed: {repr(e)}",
+                flush=True
             )
+
             continue
 
         if not text:
@@ -259,15 +343,15 @@ def load_pdf(pdf_path: str):
             Document(
                 page_content=text,
                 metadata={
-                    "source": str(pdf_path),
-                    "page": page_number,
-                },
+                    "source": os.path.basename(pdf_path),
+                    "page": page_number
+                }
             )
         )
 
     print(
         f"[PDF] Pages with text: {len(documents)}",
-        flush=True,
+        flush=True
     )
 
     return documents
@@ -277,28 +361,33 @@ def load_pdf(pdf_path: str):
 # CHUNKING
 # =========================================================
 
-
 def create_chunks(documents):
+
+    print(
+        "[CHUNKING] Starting...",
+        flush=True
+    )
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
-        chunk_overlap=200,
+        chunk_overlap=200
     )
 
-    chunks = splitter.split_documents(documents)
+    chunks = splitter.split_documents(
+        documents
+    )
 
     print(
         f"[CHUNKING] Created {len(chunks)} chunks",
-        flush=True,
+        flush=True
     )
 
     return chunks
 
 
 # =========================================================
-# EMBEDDING DOCUMENTS
+# EMBEDD DOCUMENTS
 # =========================================================
-
 
 def embed_documents(chunks):
 
@@ -313,7 +402,7 @@ def embed_documents(chunks):
     print(
         f"[EMBEDDING] Creating embeddings for "
         f"{len(texts)} chunks...",
-        flush=True,
+        flush=True
     )
 
     embeddings = embedding_model.embed_documents(
@@ -321,113 +410,127 @@ def embed_documents(chunks):
     )
 
     print(
-        "[EMBEDDING] Finished",
-        flush=True,
+        "[EMBEDDING] Embeddings completed",
+        flush=True
     )
 
     return embeddings
 
 
 # =========================================================
-# INDEX DOCUMENT
+# CLEAR VECTOR DATABASE
 # =========================================================
 
-
-def index_document(pdf_path: str):
-
-    global collection
+def clear_collection():
 
     print(
-        "\n========== INDEX DOCUMENT ==========",
-        flush=True,
+        "[CHROMA] Clearing existing vectors...",
+        flush=True
     )
-
-    # -----------------------------------------------------
-    # Delete previous vectors
-    # -----------------------------------------------------
 
     try:
 
-        existing_count = collection.count()
-
-        print(
-            f"[CHROMA] Existing vectors: {existing_count}",
-            flush=True,
+        existing = collection.get(
+            include=[]
         )
 
-        if existing_count > 0:
+        existing_ids = existing.get(
+            "ids",
+            []
+        )
 
-            existing = collection.get(
-                include=[]
+        print(
+            f"[CHROMA] Existing IDs: {len(existing_ids)}",
+            flush=True
+        )
+
+        if existing_ids:
+
+            collection.delete(
+                ids=existing_ids
             )
 
-            existing_ids = existing.get(
-                "ids",
-                [],
+            print(
+                "[CHROMA] Existing vectors deleted",
+                flush=True
             )
 
-            if existing_ids:
+        else:
 
-                print(
-                    f"[CHROMA] Deleting "
-                    f"{len(existing_ids)} vectors...",
-                    flush=True,
-                )
-
-                collection.delete(
-                    ids=existing_ids
-                )
-
-                print(
-                    "[CHROMA] Old vectors deleted",
-                    flush=True,
-                )
+            print(
+                "[CHROMA] Nothing to delete",
+                flush=True
+            )
 
     except Exception as e:
 
         print(
-            f"[CHROMA] Delete failed: {e}",
-            flush=True,
+            f"[CHROMA] Clear failed: {repr(e)}",
+            flush=True
         )
 
         raise
 
 
+# =========================================================
+# INDEX DOCUMENT
+# =========================================================
+
+def index_document(pdf_path: str):
+
+    print(
+        "\n========== INDEX DOCUMENT ==========",
+        flush=True
+    )
+
+    # -----------------------------------------------------
+    # Clear old document
+    # -----------------------------------------------------
+
+    clear_collection()
+
     # -----------------------------------------------------
     # Load PDF
     # -----------------------------------------------------
 
-    documents = load_pdf(pdf_path)
+    documents = load_pdf(
+        pdf_path
+    )
 
     if not documents:
+
         raise ValueError(
             "No readable text was found in the PDF."
         )
 
-
     # -----------------------------------------------------
-    # Chunk
+    # Create chunks
     # -----------------------------------------------------
 
-    chunks = create_chunks(documents)
+    chunks = create_chunks(
+        documents
+    )
 
     if not chunks:
-        raise ValueError(
-            "No chunks were created from the PDF."
-        )
 
+        raise ValueError(
+            "No chunks were created."
+        )
 
     # -----------------------------------------------------
     # Embeddings
     # -----------------------------------------------------
 
-    embeddings = embed_documents(chunks)
+    embeddings = embed_documents(
+        chunks
+    )
 
     if len(embeddings) != len(chunks):
-        raise RuntimeError(
-            "Embedding count does not match chunk count."
-        )
 
+        raise RuntimeError(
+            "Embedding count does not match "
+            "chunk count."
+        )
 
     # -----------------------------------------------------
     # Prepare Chroma data
@@ -437,7 +540,9 @@ def index_document(pdf_path: str):
     texts = []
     metadatas = []
 
-    base_name = os.path.basename(pdf_path)
+    base_name = os.path.basename(
+        pdf_path
+    )
 
     for i, chunk in enumerate(chunks):
 
@@ -449,10 +554,15 @@ def index_document(pdf_path: str):
             chunk.page_content
         )
 
-        metadatas.append(
+        metadata = dict(
             chunk.metadata
         )
 
+        metadata["source"] = base_name
+
+        metadatas.append(
+            metadata
+        )
 
     # -----------------------------------------------------
     # Store
@@ -460,25 +570,29 @@ def index_document(pdf_path: str):
 
     print(
         "[CHROMA] Storing vectors...",
-        flush=True,
+        flush=True
     )
 
     collection.upsert(
         ids=ids,
         documents=texts,
         embeddings=embeddings,
-        metadatas=metadatas,
+        metadatas=metadatas
     )
 
     print(
-        "[CHROMA] Document indexed successfully.",
-        flush=True,
+        "[CHROMA] Vectors stored successfully",
+        flush=True
     )
 
     print(
-        f"[CHROMA] Total vectors now: "
-        f"{collection.count()}",
-        flush=True,
+        f"[CHROMA] Indexed chunks = {len(chunks)}",
+        flush=True
+    )
+
+    print(
+        "========== INDEX COMPLETE ==========\n",
+        flush=True
     )
 
     return len(chunks)
@@ -488,15 +602,14 @@ def index_document(pdf_path: str):
 # VECTOR SEARCH
 # =========================================================
 
-
 def vector_search(
     query: str,
-    top_k: int = 3,
+    top_k: int = 3
 ):
 
     print(
         "[RAG] Creating query embedding...",
-        flush=True,
+        flush=True
     )
 
     query_embedding = embedding_model.embed_query(
@@ -505,39 +618,39 @@ def vector_search(
 
     print(
         "[RAG] Query embedding created",
-        flush=True,
+        flush=True
     )
 
     print(
-        f"[RAG] Querying Chroma top_k={top_k}...",
-        flush=True,
+        f"[RAG] Searching Chroma top_k={top_k}...",
+        flush=True
     )
 
     results = collection.query(
         query_embeddings=[query_embedding],
-        n_results=top_k,
+        n_results=top_k
     )
 
     print(
-        "[RAG] Chroma query completed",
-        flush=True,
+        "[RAG] Chroma search completed",
+        flush=True
     )
 
     documents = results.get(
         "documents",
-        [[]],
+        [[]]
     )[0]
 
     metadatas = results.get(
         "metadatas",
-        [[]],
+        [[]]
     )[0]
 
     retrieved = []
 
     for document, metadata in zip(
         documents,
-        metadatas,
+        metadatas
     ):
 
         if not document:
@@ -546,36 +659,93 @@ def vector_search(
         retrieved.append(
             {
                 "text": document,
-                "metadata": metadata or {},
+                "metadata": metadata or {}
             }
         )
 
     print(
         f"[RAG] Retrieved {len(retrieved)} chunks",
-        flush=True,
+        flush=True
     )
 
     return retrieved
 
 
 # =========================================================
-# GEMINI GENERATION
+# SIMPLE QUESTION CLASSIFICATION
 # =========================================================
 
+def should_use_rag(question: str) -> bool:
+
+    q = question.lower().strip()
+
+    # -----------------------------------------------------
+    # Greetings
+    # -----------------------------------------------------
+
+    greetings = {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "မင်္ဂလာပါ"
+    }
+
+    if q in greetings:
+
+        print(
+            "[RAG] Greeting detected -> no RAG",
+            flush=True
+        )
+
+        return False
+
+    # -----------------------------------------------------
+    # Very short conversational messages
+    # -----------------------------------------------------
+
+    conversational = {
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "bye",
+        "goodbye"
+    }
+
+    if q in conversational:
+
+        print(
+            "[RAG] Conversation detected -> no RAG",
+            flush=True
+        )
+
+        return False
+
+    return True
+
+
+# =========================================================
+# GEMINI GENERATION
+# =========================================================
 
 def generate_answer(
     question: str,
     retrieved_docs: list,
-    history=None,
+    history=None
 ):
 
     print(
         "[GEMINI] Building prompt...",
-        flush=True,
+        flush=True
     )
 
     # -----------------------------------------------------
-    # History
+    # Conversation history
     # -----------------------------------------------------
 
     history_block = ""
@@ -603,7 +773,6 @@ def generate_answer(
             + "\n\n"
         )
 
-
     # -----------------------------------------------------
     # RAG context
     # -----------------------------------------------------
@@ -614,11 +783,11 @@ def generate_answer(
 
         for i, doc in enumerate(
             retrieved_docs,
-            start=1,
+            start=1
         ):
 
             context_parts.append(
-                f"--- Context {i} ---\n\n"
+                f"--- Context {i} ---\n"
                 f"{doc['text']}\n"
             )
 
@@ -627,12 +796,13 @@ def generate_answer(
         )
 
         prompt = f"""
-You are an assistant AI chatbot for
+You are an AI assistant for
 University of Computer Studies Taungoo.
 
-You are helpful, friendly, and concise.
+You are helpful, friendly, concise,
+and accurate.
 
-University information:
+UNIVERSITY INFORMATION:
 
 Rector:
 Dr. Ei Ei Hlaing
@@ -645,30 +815,28 @@ Taungoo, Bago Region.
 
 RULES:
 
-1. Use the conversation history when the
-   user refers to previous messages.
+1. Use conversation history to understand
+   references to previous messages.
 
-2. If the user's question can be answered
-   from the document context, prioritize
-   the document context.
+2. If the user's question is answered by
+   the document context, prioritize the
+   document context.
 
-3. Respond naturally to greetings.
+3. Do not invent facts from the document.
 
-4. You may answer general questions about:
-   - Computer science
-   - Programming
-   - Mathematics
-   - Technology
-   - AI
-   - Science
-
-5. If a question is specifically about the
-   uploaded document and the answer cannot
-   be found in the retrieved context,
+4. If the question is specifically about
+   the uploaded document and the supplied
+   context does not contain the answer,
    say that the available document context
    does not contain enough information.
 
-6. Do not invent document-specific facts.
+5. General questions about programming,
+   computer science, mathematics,
+   technology, AI, and science may be
+   answered using general knowledge.
+
+6. Respond naturally to greetings and
+   normal conversation.
 
 7. Do not include source page references.
 
@@ -687,14 +855,15 @@ CURRENT USER MESSAGE:
 
         prompt = f"""
 You are DocMind AI, a helpful and friendly
-assistant with memory of the current
-conversation.
+AI assistant.
+
+You have memory of the current conversation.
 
 {history_block}
 
 Answer the user's message naturally.
 
-You can answer general questions about:
+You may answer questions about:
 
 - Computer science
 - Programming
@@ -702,35 +871,36 @@ You can answer general questions about:
 - Technology
 - AI
 - Science
+- General knowledge
 
-Be concise, helpful, and accurate.
+Be helpful, concise, and accurate.
 
 CURRENT USER MESSAGE:
 
 {question}
 """
 
-
     # -----------------------------------------------------
-    # Gemini
+    # Gemini request
     # -----------------------------------------------------
 
     print(
         "[GEMINI] Sending request...",
-        flush=True,
+        flush=True
     )
 
     response = client.models.generate_content(
         model="gemini-3.1-flash-lite",
-        contents=prompt,
+        contents=prompt
     )
 
     print(
         "[GEMINI] Response received",
-        flush=True,
+        flush=True
     )
 
     if not response:
+
         raise RuntimeError(
             "Gemini returned an empty response."
         )
@@ -738,10 +908,11 @@ CURRENT USER MESSAGE:
     answer = getattr(
         response,
         "text",
-        None,
+        None
     )
 
     if not answer:
+
         raise RuntimeError(
             "Gemini response did not contain text."
         )
@@ -750,73 +921,101 @@ CURRENT USER MESSAGE:
 
 
 # =========================================================
-# RAG PIPELINE
+# ASK PIPELINE
 # =========================================================
-
 
 def ask(
     question: str,
-    has_documents: bool = False,
-    history=None,
+    history=None
 ):
 
     print(
         "\n"
         + "=" * 60,
-        flush=True,
+        flush=True
     )
 
     print(
         f"[ASK] Question: {question}",
-        flush=True,
+        flush=True
     )
 
     retrieved = []
 
     # -----------------------------------------------------
-    # RAG
+    # Decide whether RAG is needed
     # -----------------------------------------------------
 
-    if has_documents:
+    use_rag = should_use_rag(
+        question
+    )
+
+    if use_rag:
 
         print(
-            "[ASK] Documents available",
-            flush=True,
+            "[ASK] RAG required",
+            flush=True
         )
 
-        retrieved = vector_search(
-            query=question,
-            top_k=3,
-        )
+        # IMPORTANT:
+        #
+        # We don't call collection.count()
+        # here.
+        #
+        # Instead, directly try the search.
+        #
+        # If there are no documents, Chroma will
+        # return an empty result or raise an error
+        # that we can handle.
+
+        try:
+
+            retrieved = vector_search(
+                query=question,
+                top_k=3
+            )
+
+        except Exception as e:
+
+            print(
+                f"[RAG] Search failed: {repr(e)}",
+                flush=True
+            )
+
+            # Don't crash the entire chatbot.
+            #
+            # Fall back to Gemini without RAG.
+
+            retrieved = []
 
     else:
 
         print(
-            "[ASK] No documents. "
-            "Using general knowledge.",
-            flush=True,
+            "[ASK] RAG not required",
+            flush=True
         )
 
-
     # -----------------------------------------------------
-    # Generate
+    # Generate answer
     # -----------------------------------------------------
 
     answer = generate_answer(
         question=question,
         retrieved_docs=retrieved,
-        history=history,
+        history=history
     )
 
     return answer
 
 
 # =========================================================
-# ROUTE: HOME
+# HOME
 # =========================================================
 
-
-@app.route("/", methods=["GET"])
+@app.route(
+    "/",
+    methods=["GET"]
+)
 def index():
 
     return render_template(
@@ -825,12 +1024,31 @@ def index():
 
 
 # =========================================================
-# ROUTE: HEALTH CHECK
+# HEALTH
 # =========================================================
 
-
-@app.route("/health", methods=["GET"])
+@app.route(
+    "/health",
+    methods=["GET"]
+)
 def health():
+
+    return jsonify(
+        {
+            "status": "ok"
+        }
+    ), 200
+
+
+# =========================================================
+# CHROMA HEALTH
+# =========================================================
+
+@app.route(
+    "/health/chroma",
+    methods=["GET"]
+)
+def chroma_health():
 
     try:
 
@@ -840,6 +1058,7 @@ def health():
             {
                 "status": "ok",
                 "vectors": count,
+                "path": str(CHROMA_DB_PATH)
             }
         ), 200
 
@@ -849,89 +1068,119 @@ def health():
             {
                 "status": "error",
                 "error": str(e),
+                "path": str(CHROMA_DB_PATH)
             }
         ), 500
 
 
 # =========================================================
-# ROUTE: UPLOAD
+# UPLOAD
 # =========================================================
-
 
 @app.route(
     "/upload",
-    methods=["POST"],
+    methods=["POST"]
 )
 def upload():
 
     print(
-        "[UPLOAD] Request received",
-        flush=True,
+        "\n========== UPLOAD START ==========",
+        flush=True
     )
-
-    if "file" not in request.files:
-
-        return jsonify(
-            {
-                "error":
-                "No file part in the request."
-            }
-        ), 400
-
-
-    file = request.files["file"]
-
-
-    if file.filename == "":
-
-        return jsonify(
-            {
-                "error":
-                "No file selected."
-            }
-        ), 400
-
-
-    if not allowed_file(
-        file.filename
-    ):
-
-        return jsonify(
-            {
-                "error":
-                "Only PDF files are allowed."
-            }
-        ), 400
-
-
-    filename = secure_filename(
-        file.filename
-    )
-
-    unique_name = (
-        f"{uuid.uuid4().hex}_"
-        f"{filename}"
-    )
-
-    save_path = (
-        UPLOAD_FOLDER
-        / unique_name
-    )
-
 
     try:
+
+        # -------------------------------------------------
+        # Check file
+        # -------------------------------------------------
+
+        if "file" not in request.files:
+
+            return jsonify(
+                {
+                    "error":
+                        "No file part in request."
+                }
+            ), 400
+
+        file = request.files["file"]
+
+        if not file.filename:
+
+            return jsonify(
+                {
+                    "error":
+                        "No file selected."
+                }
+            ), 400
+
+        # -------------------------------------------------
+        # Validate extension
+        # -------------------------------------------------
+
+        if not allowed_file(
+            file.filename
+        ):
+
+            return jsonify(
+                {
+                    "error":
+                        "Only PDF files are allowed."
+                }
+            ), 400
+
+        # -------------------------------------------------
+        # Secure filename
+        # -------------------------------------------------
+
+        filename = secure_filename(
+            file.filename
+        )
+
+        unique_name = (
+            f"{uuid.uuid4().hex}_"
+            f"{filename}"
+        )
+
+        save_path = (
+            UPLOAD_FOLDER
+            / unique_name
+        )
+
+        print(
+            f"[UPLOAD] Saving to: {save_path}",
+            flush=True
+        )
+
+        # -------------------------------------------------
+        # Save
+        # -------------------------------------------------
 
         file.save(
             str(save_path)
         )
 
         print(
-            f"[UPLOAD] Saved: {save_path}",
-            flush=True,
+            "[UPLOAD] File saved",
+            flush=True
         )
+
+        # -------------------------------------------------
+        # Index
+        # -------------------------------------------------
 
         chunk_count = index_document(
             str(save_path)
+        )
+
+        print(
+            "[UPLOAD] Indexing complete",
+            flush=True
+        )
+
+        print(
+            "========== UPLOAD COMPLETE ==========\n",
+            flush=True
         )
 
         return jsonify(
@@ -942,16 +1191,20 @@ def upload():
                 "filename":
                     filename,
                 "chunks":
-                    chunk_count,
+                    chunk_count
             }
         ), 200
-
 
     except Exception as e:
 
         print(
-            f"[UPLOAD ERROR] {repr(e)}",
-            flush=True,
+            "[UPLOAD ERROR]",
+            flush=True
+        )
+
+        print(
+            repr(e),
+            flush=True
         )
 
         return jsonify(
@@ -962,180 +1215,130 @@ def upload():
 
 
 # =========================================================
-# ROUTE: ASK
+# ASK
 # =========================================================
-
 
 @app.route(
     "/ask",
-    methods=["POST"],
+    methods=["POST"]
 )
 def ask_question():
 
     print(
         "\n========== /ask START ==========",
-        flush=True,
+        flush=True
     )
 
+    try:
 
-    # -----------------------------------------------------
-    # Parse JSON
-    # -----------------------------------------------------
+        # -------------------------------------------------
+        # JSON
+        # -------------------------------------------------
 
-    data = request.get_json(
-        silent=True
-    )
-
-    print(
-        f"[ASK ROUTE] JSON: {data}",
-        flush=True,
-    )
-
-
-    if not data or "question" not in data:
-
-        print(
-            "[ASK ROUTE] Missing question",
-            flush=True,
+        data = request.get_json(
+            silent=True
         )
 
-        return jsonify(
-            {
-                "error":
-                "Missing 'question' in request body."
-            }
-        ), 400
+        print(
+            f"[ASK ROUTE] JSON = {data}",
+            flush=True
+        )
 
+        if not data:
 
-    question = data["question"]
+            return jsonify(
+                {
+                    "error":
+                        "Request body must be JSON."
+                }
+            ), 400
 
+        if "question" not in data:
 
-    if not isinstance(
-        question,
-        str,
-    ):
+            return jsonify(
+                {
+                    "error":
+                        "Missing 'question'."
+                }
+            ), 400
 
-        return jsonify(
-            {
-                "error":
-                "'question' must be a string."
-            }
-        ), 400
+        question = data["question"]
 
+        if not isinstance(
+            question,
+            str
+        ):
 
-    question = question.strip()
+            return jsonify(
+                {
+                    "error":
+                        "'question' must be a string."
+                }
+            ), 400
 
+        question = question.strip()
 
-    if not question:
+        if not question:
 
-        return jsonify(
-            {
-                "error":
-                "Question cannot be empty."
-            }
-        ), 400
+            return jsonify(
+                {
+                    "error":
+                        "Question cannot be empty."
+                }
+            ), 400
 
+        # -------------------------------------------------
+        # Session
+        # -------------------------------------------------
 
-    # -----------------------------------------------------
-    # Session
-    # -----------------------------------------------------
-
-    sid = (
-        data.get("session_id")
-        or secrets.token_hex(16)
-    )
-
-
-    if not isinstance(
-        sid,
-        str,
-    ):
+        sid = (
+            data.get("session_id")
+            or secrets.token_hex(16)
+        )
 
         sid = str(sid)
 
+        if sid not in chat_histories:
 
-    if sid not in chat_histories:
+            chat_histories[sid] = deque(
+                maxlen=MAX_HISTORY_TURNS
+            )
 
-        chat_histories[sid] = deque(
-            maxlen=MAX_HISTORY_TURNS
-        )
-
-
-    history = list(
-        chat_histories[sid]
-    )
-
-
-    print(
-        f"[ASK ROUTE] Session: {sid}",
-        flush=True,
-    )
-
-
-    # -----------------------------------------------------
-    # Check documents
-    # -----------------------------------------------------
-
-    try:
-
-        print(
-            "[ASK ROUTE] Checking Chroma...",
-            flush=True,
-        )
-
-        vector_count = collection.count()
-
-        has_documents = (
-            vector_count > 0
+        history = list(
+            chat_histories[sid]
         )
 
         print(
-            f"[ASK ROUTE] Chroma vectors: "
-            f"{vector_count}",
-            flush=True,
+            f"[ASK ROUTE] Session = {sid}",
+            flush=True
         )
 
-
-    except Exception as e:
-
         print(
-            f"[ASK ROUTE] Chroma error: "
-            f"{repr(e)}",
-            flush=True,
+            f"[ASK ROUTE] History messages = "
+            f"{len(history)}",
+            flush=True
         )
 
-        return jsonify(
-            {
-                "error":
-                    "Vector database error.",
-                "details":
-                    str(e),
-            }
-        ), 500
-
-
-    # -----------------------------------------------------
-    # Ask
-    # -----------------------------------------------------
-
-    try:
+        # -------------------------------------------------
+        # IMPORTANT
+        #
+        # NO collection.count() HERE
+        # -------------------------------------------------
 
         print(
-            "[ASK ROUTE] Calling ask()...",
-            flush=True,
+            "[ASK ROUTE] Starting ask()...",
+            flush=True
         )
 
         answer = ask(
             question=question,
-            has_documents=has_documents,
-            history=history,
+            history=history
         )
 
         print(
             "[ASK ROUTE] ask() completed",
-            flush=True,
+            flush=True
         )
-
 
         # -------------------------------------------------
         # Save conversation
@@ -1144,56 +1347,71 @@ def ask_question():
         chat_histories[sid].append(
             {
                 "role": "user",
-                "content": question,
+                "content": question
             }
         )
 
         chat_histories[sid].append(
             {
                 "role": "assistant",
-                "content": answer,
+                "content": answer
             }
         )
 
+        print(
+            f"[ASK ROUTE] History now contains "
+            f"{len(chat_histories[sid])} messages",
+            flush=True
+        )
 
         print(
             "[ASK ROUTE] Returning response",
-            flush=True,
+            flush=True
         )
 
+        print(
+            "========== /ask END ==========\n",
+            flush=True
+        )
 
         return jsonify(
             {
                 "answer": answer,
-                "session_id": sid,
+                "session_id": sid
             }
         ), 200
-
 
     except Exception as e:
 
         print(
-            "\n[ASK ERROR]",
+            "\n========== /ask ERROR ==========",
+            flush=True
+        )
+
+        print(
             repr(e),
-            flush=True,
+            flush=True
+        )
+
+        print(
+            "================================\n",
+            flush=True
         )
 
         return jsonify(
             {
-                "error":
-                    str(e)
+                "error": str(e)
             }
         ), 500
 
 
 # =========================================================
-# ROUTE: CLEAR HISTORY
+# CLEAR CHAT HISTORY
 # =========================================================
-
 
 @app.route(
     "/clear-history",
-    methods=["POST"],
+    methods=["POST"]
 )
 def clear_history():
 
@@ -1208,17 +1426,18 @@ def clear_history():
         "session_id"
     )
 
+    if sid:
 
-    if sid and sid in chat_histories:
+        sid = str(sid)
 
-        chat_histories[sid].clear()
+        if sid in chat_histories:
 
-        print(
-            f"[SESSION] Cleared "
-            f"{sid[:8]}...",
-            flush=True,
-        )
+            chat_histories[sid].clear()
 
+            print(
+                f"[SESSION] Cleared {sid[:8]}...",
+                flush=True
+            )
 
     return jsonify(
         {
@@ -1228,18 +1447,41 @@ def clear_history():
 
 
 # =========================================================
+# DEBUG ROUTE
+# =========================================================
+
+@app.route(
+    "/debug/paths",
+    methods=["GET"]
+)
+def debug_paths():
+
+    return jsonify(
+        {
+            "base_dir": str(BASE_DIR),
+            "upload_folder": str(UPLOAD_FOLDER),
+            "chroma_db": str(CHROMA_DB_PATH),
+            "upload_exists": UPLOAD_FOLDER.exists(),
+            "chroma_exists": CHROMA_DB_PATH.exists()
+        }
+    )
+
+
+# =========================================================
 # MAIN
 # =========================================================
 
 if __name__ == "__main__":
 
+    port = int(
+        os.getenv(
+            "PORT",
+            "5001"
+        )
+    )
+
     app.run(
         host="0.0.0.0",
-        port=int(
-            os.getenv(
-                "PORT",
-                "5001",
-            )
-        ),
-        debug=True,
+        port=port,
+        debug=True
     )
