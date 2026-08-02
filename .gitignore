@@ -6,3 +6,5 @@ text.txt
 _pycache__
 reranker_cache
 documents
+chroma_db
+uploads
