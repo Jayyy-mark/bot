@@ -1,0 +1,11 @@
+python-dotenv
+google-genai
+langchain-google-genai
+langchain-text-splitters
+langchain-core
+chromadb
+pypdf
+flashrank
+flask
+flask-cors
+werkzeug
