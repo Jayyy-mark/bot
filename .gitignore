@@ -3,9 +3,10 @@ venv
 test.py
 chatbot_widget.html
 text.txt
-_pycache__
+__pycache__
 reranker_cache
 documents
 chroma_db
 uploads
 .flaskenv
+test.html
