@@ -76,9 +76,43 @@ if not GEMINI_API_KEY:
         "Set it in Render Environment Variables."
     )
 
+# =========================================================
+# FLASK
+# =========================================================
 
-UPLOAD_FOLDER = Path("./uploads")
-CHROMA_DB_PATH = Path("./chroma_db")
+app = Flask(__name__)
+
+
+
+
+# =========================================================
+# CORS
+# =========================================================
+
+# Your session ID is stored in the request body.
+# Therefore we don't need cookies for chat sessions.
+
+CORS(
+    app,
+    resources={
+        r"/*": {
+            "origins": "*",
+            "methods": [
+                "GET",
+                "POST",
+                "OPTIONS",
+            ],
+            "allow_headers": [
+                "Content-Type",
+            ],
+        }
+    },
+)
+
+
+
+UPLOAD_FOLDER = Path(app.root_path) / "uploads"
+CHROMA_DB_PATH = Path(app.root_path) / "chroma_db"
 
 ALLOWED_EXTENSIONS = {"pdf"}
 
@@ -89,6 +123,8 @@ MAX_HISTORY_TURNS = 20
 UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 CHROMA_DB_PATH.mkdir(parents=True, exist_ok=True)
 
+app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
+app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE
 
 # =========================================================
 # GOOGLE CLIENT
@@ -122,39 +158,6 @@ collection = chroma_client.get_or_create_collection(
 )
 
 
-# =========================================================
-# FLASK
-# =========================================================
-
-app = Flask(__name__)
-
-app.config["UPLOAD_FOLDER"] = str(UPLOAD_FOLDER)
-app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE
-
-
-# =========================================================
-# CORS
-# =========================================================
-
-# Your session ID is stored in the request body.
-# Therefore we don't need cookies for chat sessions.
-
-CORS(
-    app,
-    resources={
-        r"/*": {
-            "origins": "*",
-            "methods": [
-                "GET",
-                "POST",
-                "OPTIONS",
-            ],
-            "allow_headers": [
-                "Content-Type",
-            ],
-        }
-    },
-)
 
 
 # =========================================================
