@@ -8,3 +8,4 @@ reranker_cache
 documents
 chroma_db
 uploads
+.flaskenv
