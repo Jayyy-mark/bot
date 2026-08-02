@@ -149,13 +149,33 @@ embedding_model = GoogleGenerativeAIEmbeddings(
 # CHROMADB
 # =========================================================
 
+print("=" * 60, flush=True)
+print(f"[CHROMA] DB PATH = {CHROMA_DB_PATH}", flush=True)
+print(f"[CHROMA] PATH EXISTS = {CHROMA_DB_PATH.exists()}", flush=True)
+print(f"[CHROMA] PATH IS DIR = {CHROMA_DB_PATH.is_dir()}", flush=True)
+
+print("[CHROMA] Creating PersistentClient...", flush=True)
+
 chroma_client = chromadb.PersistentClient(
     path=str(CHROMA_DB_PATH)
 )
 
+print("[CHROMA] PersistentClient created", flush=True)
+
+print("[CHROMA] Getting collection...", flush=True)
+
 collection = chroma_client.get_or_create_collection(
     name="documents"
 )
+
+print("[CHROMA] Collection created/opened", flush=True)
+
+print("[CHROMA] Testing count()...", flush=True)
+
+count = collection.count()
+
+print(f"[CHROMA] Initial count = {count}", flush=True)
+print("=" * 60, flush=True)
 
 
 
