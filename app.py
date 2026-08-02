@@ -362,7 +362,18 @@ def ask(question, has_documents=True, history=None):
 
 app = Flask(__name__)
 # Allow any origin — session state is carried in the request body, not cookies.
-CORS(app)
+CORS(
+    app,
+    resources={
+        r"/*": {
+            "origins": [
+                "http://127.0.0.1:5001",
+                "http://localhost:5001",
+                "https://bot-0s3f.onrender.com"
+            ]
+        }
+    }
+)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB limit
 
