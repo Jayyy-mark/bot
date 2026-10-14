@@ -85,7 +85,7 @@ def ask_llm():
         )
 
         response = client.models.generate_content(
-            model="gemini-3.1-flash-lite",
+            model="gemini-3.8-live",
             contents=prompt
         )
 
